@@ -1,0 +1,34 @@
+﻿# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build & outputs
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment & Secrets (CRITICAL)
+.env
+.env.*
+*.env
+*.env.local
+!.env.example
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

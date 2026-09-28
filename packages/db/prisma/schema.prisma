@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Source {
+  id              String          @id @default(cuid())
+  name            String
+  baseUrl         String
+  feedUrl         String?
+  scrapeConfig    Json
+  isActive        Boolean         @default(true)
+  lastScrapedAt   DateTime?
+  createdAt       DateTime        @default(now())
+  rawJobs         RawJob[]
+  scrapeRuns      ScrapeRun[]
+  categoryAliases CategoryAlias[]
+}
+
+model ScrapeRun {
+  id         String    @id @default(cuid())
+  sourceId   String
+  source     Source    @relation(fields: [sourceId], references: [id])
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  status     String    // success | failed | partial
+  jobsFound  Int       @default(0)
+  jobsNew    Int       @default(0)
+  errorMsg   String?
+}
+
+model RawJob {
+  id                 String    @id @default(cuid())
+  sourceId           String
+  source             Source    @relation(fields: [sourceId], references: [id])
+  sourceUrl          String    @unique
+  rawTitle           String
+  rawHtml            String    @db.Text
+  sourceCategoryTags String[]  // raw tags/categories as scraped, e.g. ["2026-batch-off-campus-jobs","bangalore-off-campus"]
+  companyGuess       String?   // cheap regex pre-extraction from title, used as a Stage-A dedup pre-filter
+  roleGuess          String?
+  cityGuess          String?
+  scrapedAt          DateTime  @default(now())
+  processedAt        DateTime?
+  status             String    @default("pending") // pending | processed | duplicate | rejected_by_llm
+  duplicateOfJobId   String?
+  job                Job?
+}
+
+model Job {
+  id                 String    @id @default(cuid())
+  rawJobId           String?   @unique
+  rawJob             RawJob?   @relation(fields: [rawJobId], references: [id])
+
+  company            String
+  companyNormalized  String    // lowercased, punctuation-stripped — dedup matching key
+  role               String
+  roleNormalized     String
+  description        String    @db.Text   // LLM-rewritten, clean (final merged output from both sources)
+  descriptionRaw     String?   @db.Text   // original from aggregator, kept for audit — never shown publicly
+  descriptionFromSource  String?  @db.Text   // cleaned text extracted from aggregator blog page
+  descriptionFromApply   String?  @db.Text   // cleaned text extracted from the actual apply/careers page
+  applyPageScraped       Boolean  @default(false) // whether we successfully scraped the apply page
+
+  // Rich content fields — AI-generated, competitor-quality long-form content
+  eligibilityDetailed      String?  @db.Text  // 8-12 bullet points with bold keywords
+  responsibilitiesDetailed String?  @db.Text  // 6-10 detailed bullet points
+  skillsTools              String?  @db.Text  // tools & technologies section
+  preparationTips          String?  @db.Text  // "How to prepare" numbered list
+  importantPoints          String?  @db.Text  // key highlights as bullets
+  aboutCompany             String?  @db.Text  // 2-3 paragraph company overview
+  careerGrowth             String?  @db.Text  // paragraph on growth opportunity
+
+  batchYears         String[]  // canonical values only, e.g. ["2025","2026"]
+  degree             String[]  // canonical values only
+  city               String[]  // canonical values only, includes "Remote"/"Pan India" as real values
+  jobType            String    // fresher | internship | experienced
+  experienceMin      Int?
+  experienceMax      Int?
+  salaryText         String?
+  functionalArea     String?   // Software Development | QA/Testing | Data/Analytics | DevOps/Cloud | Support | Business | HR | Finance | Other
+
+  categoryConfidence String    @default("high") // high | low | needs_review
+
+  applyUrl           String
+  sourceAttribution  String?
+
+  deadline           DateTime?
+  status             String    @default("draft") // draft | published | expired | rejected
+  publishedAt        DateTime?
+  expiredAt          DateTime?
+
+  seenOnSourceIds    String[]  // every source this job was independently found on, tracked across merges
+
+  slug               String    @unique
+  viewCount          Int       @default(0)
+  applyClickCount    Int       @default(0)
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  socialPosts        SocialPost[]
+
+  @@index([status, publishedAt])
+  @@index([companyNormalized, roleNormalized])
+  @@index([categoryConfidence])
+}
+
+model CanonicalValue {
+  id       String  @id @default(cuid())
+  type     String  // "batchYear" | "degree" | "city" | "jobType" | "functionalArea"
+  value    String
+  isActive Boolean @default(true)
+
+  @@unique([type, value])
+}
+
+model CategoryAlias {
+  id             String @id @default(cuid())
+  sourceId       String
+  source         Source @relation(fields: [sourceId], references: [id])
+  rawValue       String // e.g. "2026-batch-off-campus-jobs" or "BE/BTECH"
+  canonicalType  String // "batchYear" | "degree" | "city" | "jobType"
+  canonicalValue String // e.g. "2026" or "B.E/B.Tech"
+  confidence     Float  @default(1.0)
+  createdBy      String @default("manual") // "manual" | "llm_suggested"
+
+  @@unique([sourceId, rawValue, canonicalType])
+}
+
+model CategoryConflict {
+  id            String   @id @default(cuid())
+  jobId         String
+  canonicalType String
+  aliasValue    String   // what the Tier-1 alias table said
+  llmValue      String   // what the LLM extracted from body text
+  resolved      Boolean  @default(false)
+  resolvedValue String?
+  createdAt     DateTime @default(now())
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         String   @default("editor")
+  createdAt    DateTime @default(now())
+}
+
+model CompanyLogo {
+  id                String   @id @default(cuid())
+  companyNormalized String   @unique   // same normalization as Job.companyNormalized
+  logoUrl           String             // final resolved/cached URL (or path to stored copy)
+  resolvedDomain    String?
+  source            String             // "source_scraped" | "logo_dev" | "google_favicon" | "generated_monogram" | "manual"
+  isVerified        Boolean  @default(false)  // true once a human has confirmed it's correct
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model SocialPost {
+  id          String    @id @default(cuid())
+  jobId       String
+  job         Job       @relation(fields: [jobId], references: [id])
+  platform    String    // "telegram" | "instagram" | "whatsapp"
+  imageUrl    String?   // URL/path to generated social image
+  caption     String    @db.Text
+  template    String    @default("default") // template variant name
+  status      String    @default("pending") // pending | posted | failed | manual_pending
+  postedAt    DateTime?
+  errorMsg    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([jobId])
+  @@index([status, platform])
+}
+
+model SiteConfig {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @default(now())
+}
